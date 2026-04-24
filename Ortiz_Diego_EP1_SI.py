@@ -79,10 +79,12 @@ def validar_password(p):
         return "La contrasena no puede superar 64 caracteres"
     return None
 
-def validar_dui(d):
+def validar_email(e):
     import re
-    if not re.fullmatch(r"\d{8}-\d", d):
-        return "Formato DUI invalido. Use: ########-#"
+    if not e or len(e) > 100:
+        return "El correo no puede estar vacio ni superar 100 caracteres"
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", e):
+        return "Formato de correo invalido. Use: usuario@dominio.com"
     return None
 
 def validar_producto(nombre, sku, cantidad, precio):
@@ -124,7 +126,7 @@ def init_db():
                                             CHECK(length(username) >= 3),
                     salt            BLOB    NOT NULL,
                     pwd_hash        BLOB    NOT NULL,
-                    dui_enc         BLOB    NOT NULL,
+                    email_enc       BLOB    NOT NULL,
                     failed_attempts INTEGER NOT NULL DEFAULT 0
                                             CHECK(failed_attempts >= 0),
                     locked_until    TEXT
@@ -303,6 +305,7 @@ def guardar_login():
     sesion_usuario["nombre"] = user
     login_username.delete(0, "end")
     login_password.delete(0, "end")
+    actualizar_label_email()
     mostrar(vmenu)
 
 _lb = tk.Frame(vlogin, bg=BG2)
@@ -322,32 +325,32 @@ reg_username.grid(row=1, column=0, pady=(0, 10))
 mk_label(_rf, "Contrasena (min 6 caracteres)").grid(row=2, column=0, sticky="w", pady=(0,2))
 reg_password = mk_entry(_rf, show="*")
 reg_password.grid(row=3, column=0, pady=(0, 10))
-mk_label(_rf, "DUI (########-#)").grid(row=4, column=0, sticky="w", pady=(0,2))
-reg_dui = mk_entry(_rf)
-reg_dui.grid(row=5, column=0, pady=(0, 16))
+mk_label(_rf, "Correo electronico").grid(row=4, column=0, sticky="w", pady=(0,2))
+reg_email = mk_entry(_rf)
+reg_email.grid(row=5, column=0, pady=(0, 16))
 
 def guardar_register():
-    user = reg_username.get().strip()
-    pwd  = reg_password.get()
-    dui  = reg_dui.get().strip()
+    user  = reg_username.get().strip()
+    pwd   = reg_password.get()
+    email = reg_email.get().strip()
 
-    err = validar_usuario(user) or validar_password(pwd) or validar_dui(dui)
+    err = validar_usuario(user) or validar_password(pwd) or validar_email(email)
     if err:
         messagebox.showerror("Error de validacion", err)
         return
 
-    salt     = os.urandom(16)
-    pwd_hash = derive_hash(pwd, salt)
-    dui_enc  = fernet.encrypt(dui.encode("utf-8"))
+    salt      = os.urandom(16)
+    pwd_hash  = derive_hash(pwd, salt)
+    email_enc = fernet.encrypt(email.encode("utf-8"))
     try:
         with get_con() as con:
             con.execute(
-                "INSERT INTO users(username, salt, pwd_hash, dui_enc) VALUES(?,?,?,?)",
-                (user, salt, pwd_hash, dui_enc)
+                "INSERT INTO users(username, salt, pwd_hash, email_enc) VALUES(?,?,?,?)",
+                (user, salt, pwd_hash, email_enc)
             )
         registrar_auditoria(user, "INSERT", "Nuevo usuario registrado")
         messagebox.showinfo("Exito", "Usuario registrado correctamente")
-        for e in (reg_username, reg_password, reg_dui):
+        for e in (reg_username, reg_password, reg_email):
             e.delete(0, "end")
         mostrar(inicio)
     except sqlite3.IntegrityError:
@@ -363,8 +366,21 @@ mk_btn(_rb, "Volver",    lambda: mostrar(inicio), width=14).grid(row=0, column=1
 # ── MENU PRINCIPAL ────────────────────────────────────────────────────────────
 tk.Label(vmenu, text="Menu Principal",
          font=("Arial", 16, "bold"), bg=BG2, fg=FG).pack(pady=(50, 6))
-tk.Label(vmenu, text="Selecciona una opcion",
-         font=("Arial", 9), bg=BG2, fg=FG2).pack(pady=(0, 30))
+lbl_menu_email = tk.Label(vmenu, text="", font=("Arial", 9), bg=BG2, fg=FG2)
+lbl_menu_email.pack(pady=(0, 20))
+
+def actualizar_label_email():
+    try:
+        with get_con() as con:
+            row = con.execute(
+                "SELECT email_enc FROM users WHERE username=?",
+                (sesion_usuario["nombre"],)
+            ).fetchone()
+        if row:
+            email = fernet.decrypt(row[0]).decode("utf-8")
+            lbl_menu_email.config(text=f"Sesion: {sesion_usuario['nombre']}  |  Correo: {email}")
+    except Exception:
+        lbl_menu_email.config(text=f"Sesion: {sesion_usuario['nombre']}")
 
 for _txt, _cmd in [
     ("Productos",            lambda: [mostrar(vproductos), cargar_productos()]),
