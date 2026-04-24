@@ -1,0 +1,10 @@
+# Llaves de cifrado
+fernet.key
+
+# Bases de datos locales
+inventario.db
+
+# Archivos temporales de Python
+__pycache__/
+*.py[cod]
+*$py.class
