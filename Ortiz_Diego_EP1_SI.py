@@ -1,47 +1,49 @@
-import os, sqlite3, tkinter as tk, hashlib, shutil
+import os, sqlite3, hashlib, shutil
 from tkinter import messagebox, ttk
+import customtkinter as ctk
 from datetime import datetime, timedelta
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.backends import default_backend
 from cryptography.fernet import Fernet
 
-#RUTAS
+ctk.set_appearance_mode("dark")
+
+# ── RUTAS ─────────────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 KEY_FILE  = os.path.join(BASE_DIR, "fernet.key")
 DB        = os.path.join(BASE_DIR, "inventario.db")
 
-MAX_INTENTOS  = 5
-BLOQUEO_MIN   = 5
+MAX_INTENTOS = 5
+BLOQUEO_MIN  = 5
 
-# PALETA
-BG       = "#ececec"
-BG2      = "#f8f8f8"
-FG       = "#2e2e2e"
-FG2      = "#8a8a8a"
-BTN_BG   = "#5a5a5a"
-BTN_ACT  = "#6e6e6e"
-ENTRY_BG = "#ffffff"
-SEL      = "#dcdcdc"
-BORDER   = "#d0d0d0"
+# ── PALETA AZUL / NEGRO / GRIS ────────────────────────────────────────────────
+C_BG     = "#0d1117"
+C_CARD   = "#161b22"
+C_ENTRY  = "#21262d"
+C_BLUE   = "#1f6feb"
+C_HOVER  = "#388bfd"
+C_TEXT   = "#e6edf3"
+C_TEXT2  = "#8b949e"
+C_BORDER = "#30363d"
 
-def mk_btn(parent, text, command, width=12, **kw):
-    return tk.Button(parent, text=text, command=command, width=width,
-                     bg=BTN_BG, fg=BG2, activebackground=BTN_ACT,
-                     activeforeground=BG2, relief="flat", cursor="hand2",
-                     font=("Arial", 9), padx=6, pady=4, **kw)
+# ── WIDGETS HELPERS ───────────────────────────────────────────────────────────
+def mk_btn(parent, text, command, width=120, **kw):
+    return ctk.CTkButton(parent, text=text, command=command, width=width,
+                         fg_color=C_BLUE, hover_color=C_HOVER,
+                         text_color=C_TEXT, corner_radius=8,
+                         font=("Arial", 10), **kw)
 
-def mk_entry(parent, show=None, width=22):
-    return tk.Entry(parent, show=show, width=width,
-                    bg=ENTRY_BG, fg=FG, insertbackground=FG,
-                    relief="flat", font=("Arial", 10),
-                    highlightthickness=1, highlightbackground=BORDER,
-                    highlightcolor="#111111")
+def mk_entry(parent, show=None, width=220):
+    return ctk.CTkEntry(parent, show=show, width=width,
+                        fg_color=C_ENTRY, text_color=C_TEXT,
+                        border_color=C_BORDER, border_width=1,
+                        corner_radius=8, font=("Arial", 10))
 
-def mk_label(parent, text, font=("Arial", 9), fg=FG2, **kw):
-    return tk.Label(parent, text=text, font=font,
-                    bg=BG2, fg=fg, **kw)
+def mk_label(parent, text, font=("Arial", 10), fg=None, **kw):
+    return ctk.CTkLabel(parent, text=text, font=font,
+                        text_color=fg or C_TEXT2, fg_color="transparent", **kw)
 
-#  C — FERNET
+# ── FERNET ────────────────────────────────────────────────────────────────────
 def cargar_clave():
     if os.path.exists(KEY_FILE):
         with open(KEY_FILE, "rb") as f:
@@ -53,18 +55,18 @@ def cargar_clave():
 
 fernet = Fernet(cargar_clave())
 
-#  C — HASH CONTRASEÑA
+# ── HASH CONTRASEÑA ───────────────────────────────────────────────────────────
 def derive_hash(password: str, salt: bytes) -> bytes:
     kdf = Scrypt(salt=salt, length=32, n=2**14, r=8, p=1,
                  backend=default_backend())
     return kdf.derive(password.encode("utf-8"))
 
-#  I
+# ── HASH INTEGRIDAD ───────────────────────────────────────────────────────────
 def calcular_row_hash(nombre, sku, cantidad, precio):
     contenido = f"{nombre}|{sku}|{int(cantidad)}|{float(precio)}"
     return hashlib.sha256(contenido.encode("utf-8")).hexdigest()
 
-#  I — VALIDACIONES DE ENTRADA
+# ── VALIDACIONES ──────────────────────────────────────────────────────────────
 def validar_usuario(u):
     if not u or len(u) < 3:
         return "El usuario debe tener al menos 3 caracteres"
@@ -110,7 +112,7 @@ def validar_producto(nombre, sku, cantidad, precio):
         return "Precio debe ser un numero"
     return None
 
-# BASE DE DATOS — INIT
+# ── BASE DE DATOS ─────────────────────────────────────────────────────────────
 def get_con():
     con = sqlite3.connect(DB)
     con.execute("PRAGMA foreign_keys = ON")
@@ -154,7 +156,7 @@ def init_db():
     except sqlite3.Error as e:
         messagebox.showerror("Error BD", f"No se pudo inicializar la base de datos:\n{e}")
 
-#  I — BITACORA
+# ── BITACORA ──────────────────────────────────────────────────────────────────
 def registrar_auditoria(usuario, accion, detalle=""):
     try:
         with get_con() as con:
@@ -165,33 +167,33 @@ def registrar_auditoria(usuario, accion, detalle=""):
     except sqlite3.Error:
         pass
 
-#  SESION ACTUAL
+# ── SESION ────────────────────────────────────────────────────────────────────
 sesion_usuario = {"nombre": ""}
 
-#  VENTANA PRINCIPAL
-v = tk.Tk()
+# ── VENTANA PRINCIPAL ─────────────────────────────────────────────────────────
+v = ctk.CTk()
 v.title("Sistema de Inventario")
-v.geometry("520x560")
-v.configure(bg=BG)
+v.geometry("520x580")
+v.configure(fg_color=C_BG)
 
-# ESTILO TTK
+# ── ESTILO TTK (Treeview) ─────────────────────────────────────────────────────
 style = ttk.Style()
 style.theme_use("default")
 style.configure("Treeview",
-    background=BG2, foreground=FG, fieldbackground=BG2,
-    rowheight=24, font=("Arial", 9), borderwidth=0)
+    background=C_CARD, foreground=C_TEXT, fieldbackground=C_CARD,
+    rowheight=26, font=("Arial", 9), borderwidth=0)
 style.configure("Treeview.Heading",
-    background=BTN_BG, foreground=FG,
+    background="#1c2333", foreground=C_TEXT2,
     font=("Arial", 9, "bold"), relief="flat")
 style.map("Treeview",
-    background=[("selected", SEL)],
-    foreground=[("selected", FG)])
+    background=[("selected", "#1f3a5f")],
+    foreground=[("selected", C_TEXT)])
 style.map("Treeview.Heading",
-    background=[("active", BTN_ACT)])
+    background=[("active", "#243447")])
 
-#  FRAMES
+# ── FRAMES ────────────────────────────────────────────────────────────────────
 def mk_frame(parent):
-    return tk.Frame(parent, bg=BG2)
+    return ctk.CTkFrame(parent, fg_color=C_CARD, corner_radius=0)
 
 inicio      = mk_frame(v)
 vlogin      = mk_frame(v)
@@ -208,26 +210,29 @@ def mostrar(frame):
         f.pack_forget()
     frame.pack(fill="both", expand=True)
 
-# ── PANTALLA INICIO ──────────────────────────────────────────────────────────
-tk.Label(inicio, text="Sistema de Inventario",
-         font=("Arial", 18, "bold"), bg=BG2, fg=FG).pack(pady=(60, 4))
-tk.Label(inicio, text="Gestion segura de productos",
-         font=("Arial", 10), bg=BG2, fg=FG2).pack(pady=(0, 40))
-mk_btn(inicio, "Iniciar sesion", lambda: mostrar(vlogin), width=20).pack(pady=6)
-mk_btn(inicio, "Registrarse",    lambda: mostrar(vregister), width=20).pack(pady=6)
+# ── PANTALLA INICIO ───────────────────────────────────────────────────────────
+ctk.CTkLabel(inicio, text="Sistema de Inventario",
+             font=("Arial", 20, "bold"), text_color=C_TEXT,
+             fg_color="transparent").pack(pady=(80, 4))
+ctk.CTkLabel(inicio, text="Gestion segura de productos",
+             font=("Arial", 11), text_color=C_TEXT2,
+             fg_color="transparent").pack(pady=(0, 50))
+mk_btn(inicio, "Iniciar sesion", lambda: mostrar(vlogin),    width=200).pack(pady=8)
+mk_btn(inicio, "Registrarse",    lambda: mostrar(vregister), width=200).pack(pady=8)
 
-# ── LOGIN ────────────────────────────────────────────────────────────────────
-tk.Label(vlogin, text="Iniciar sesion",
-         font=("Arial", 15, "bold"), bg=BG2, fg=FG).pack(pady=(40, 20))
+# ── LOGIN ─────────────────────────────────────────────────────────────────────
+ctk.CTkLabel(vlogin, text="Iniciar sesion",
+             font=("Arial", 17, "bold"), text_color=C_TEXT,
+             fg_color="transparent").pack(pady=(50, 24))
 
-_lf = tk.Frame(vlogin, bg=BG2)
+_lf = ctk.CTkFrame(vlogin, fg_color="transparent")
 _lf.pack()
-mk_label(_lf, "Usuario").grid(row=0, column=0, sticky="w", pady=(0,2))
+mk_label(_lf, "Usuario").grid(row=0, column=0, sticky="w", pady=(0, 2))
 login_username = mk_entry(_lf)
-login_username.grid(row=1, column=0, pady=(0, 10))
-mk_label(_lf, "Contrasena").grid(row=2, column=0, sticky="w", pady=(0,2))
+login_username.grid(row=1, column=0, pady=(0, 12))
+mk_label(_lf, "Contrasena").grid(row=2, column=0, sticky="w", pady=(0, 2))
 login_password = mk_entry(_lf, show="*")
-login_password.grid(row=3, column=0, pady=(0, 16))
+login_password.grid(row=3, column=0, pady=(0, 20))
 
 def guardar_login():
     user = login_username.get().strip()
@@ -242,7 +247,9 @@ def guardar_login():
                 (user,)
             ).fetchone()
     except sqlite3.Error as e:
-        messagebox.showerror("Error BD", f"No se pudo consultar la base de datos:\n{e}\nVerifica que el archivo .db exista o restaura desde un backup.")
+        messagebox.showerror("Error BD",
+            f"No se pudo consultar la base de datos:\n{e}\n"
+            "Verifica que el archivo .db exista o restaura desde un backup.")
         return
 
     if not row:
@@ -262,7 +269,9 @@ def guardar_login():
             return
         else:
             with get_con() as con:
-                con.execute("UPDATE users SET failed_attempts=0, locked_until=NULL WHERE username=?", (user,))
+                con.execute(
+                    "UPDATE users SET failed_attempts=0, locked_until=NULL WHERE username=?",
+                    (user,))
             intentos = 0
 
     try:
@@ -277,8 +286,7 @@ def guardar_login():
                 with get_con() as con:
                     con.execute(
                         "UPDATE users SET failed_attempts=?, locked_until=? WHERE username=?",
-                        (intentos, bloqueo, user)
-                    )
+                        (intentos, bloqueo, user))
                 registrar_auditoria(user, "LOGIN_FAIL", f"Cuenta bloqueada por {BLOQUEO_MIN} min")
                 messagebox.showerror("Bloqueado",
                     f"Demasiados intentos. Usuario bloqueado {BLOQUEO_MIN} minutos.")
@@ -286,8 +294,7 @@ def guardar_login():
                 with get_con() as con:
                     con.execute(
                         "UPDATE users SET failed_attempts=? WHERE username=?",
-                        (intentos, user)
-                    )
+                        (intentos, user))
                 registrar_auditoria(user, "LOGIN_FAIL",
                     f"Contrasena incorrecta (intento {intentos}/{MAX_INTENTOS})")
                 messagebox.showerror("Error",
@@ -298,7 +305,9 @@ def guardar_login():
 
     try:
         with get_con() as con:
-            con.execute("UPDATE users SET failed_attempts=0, locked_until=NULL WHERE username=?", (user,))
+            con.execute(
+                "UPDATE users SET failed_attempts=0, locked_until=NULL WHERE username=?",
+                (user,))
     except sqlite3.Error:
         pass
     registrar_auditoria(user, "LOGIN_OK", "Acceso exitoso")
@@ -308,26 +317,27 @@ def guardar_login():
     actualizar_label_email()
     mostrar(vmenu)
 
-_lb = tk.Frame(vlogin, bg=BG2)
+_lb = ctk.CTkFrame(vlogin, fg_color="transparent")
 _lb.pack()
-mk_btn(_lb, "Ingresar", guardar_login, width=14).grid(row=0, column=0, padx=4)
-mk_btn(_lb, "Volver",   lambda: mostrar(inicio), width=14).grid(row=0, column=1, padx=4)
+mk_btn(_lb, "Ingresar", guardar_login,          width=140).grid(row=0, column=0, padx=6)
+mk_btn(_lb, "Volver",   lambda: mostrar(inicio), width=140).grid(row=0, column=1, padx=6)
 
-# ── REGISTRO ─────────────────────────────────────────────────────────────────
-tk.Label(vregister, text="Registro de usuario",
-         font=("Arial", 15, "bold"), bg=BG2, fg=FG).pack(pady=(40, 20))
+# ── REGISTRO ──────────────────────────────────────────────────────────────────
+ctk.CTkLabel(vregister, text="Registro de usuario",
+             font=("Arial", 17, "bold"), text_color=C_TEXT,
+             fg_color="transparent").pack(pady=(50, 24))
 
-_rf = tk.Frame(vregister, bg=BG2)
+_rf = ctk.CTkFrame(vregister, fg_color="transparent")
 _rf.pack()
-mk_label(_rf, "Usuario (min 3 caracteres)").grid(row=0, column=0, sticky="w", pady=(0,2))
+mk_label(_rf, "Usuario (min 3 caracteres)").grid(row=0, column=0, sticky="w", pady=(0, 2))
 reg_username = mk_entry(_rf)
-reg_username.grid(row=1, column=0, pady=(0, 10))
-mk_label(_rf, "Contrasena (min 6 caracteres)").grid(row=2, column=0, sticky="w", pady=(0,2))
+reg_username.grid(row=1, column=0, pady=(0, 12))
+mk_label(_rf, "Contrasena (min 6 caracteres)").grid(row=2, column=0, sticky="w", pady=(0, 2))
 reg_password = mk_entry(_rf, show="*")
-reg_password.grid(row=3, column=0, pady=(0, 10))
-mk_label(_rf, "Correo electronico").grid(row=4, column=0, sticky="w", pady=(0,2))
+reg_password.grid(row=3, column=0, pady=(0, 12))
+mk_label(_rf, "Correo electronico").grid(row=4, column=0, sticky="w", pady=(0, 2))
 reg_email = mk_entry(_rf)
-reg_email.grid(row=5, column=0, pady=(0, 16))
+reg_email.grid(row=5, column=0, pady=(0, 20))
 
 def guardar_register():
     user  = reg_username.get().strip()
@@ -358,16 +368,18 @@ def guardar_register():
     except sqlite3.Error as e:
         messagebox.showerror("Error BD", str(e))
 
-_rb = tk.Frame(vregister, bg=BG2)
+_rb = ctk.CTkFrame(vregister, fg_color="transparent")
 _rb.pack()
-mk_btn(_rb, "Registrar", guardar_register, width=14).grid(row=0, column=0, padx=4)
-mk_btn(_rb, "Volver",    lambda: mostrar(inicio), width=14).grid(row=0, column=1, padx=4)
+mk_btn(_rb, "Registrar", guardar_register,       width=140).grid(row=0, column=0, padx=6)
+mk_btn(_rb, "Volver",    lambda: mostrar(inicio), width=140).grid(row=0, column=1, padx=6)
 
 # ── MENU PRINCIPAL ────────────────────────────────────────────────────────────
-tk.Label(vmenu, text="Menu Principal",
-         font=("Arial", 16, "bold"), bg=BG2, fg=FG).pack(pady=(50, 6))
-lbl_menu_email = tk.Label(vmenu, text="", font=("Arial", 9), bg=BG2, fg=FG2)
-lbl_menu_email.pack(pady=(0, 20))
+ctk.CTkLabel(vmenu, text="Menu Principal",
+             font=("Arial", 18, "bold"), text_color=C_TEXT,
+             fg_color="transparent").pack(pady=(60, 6))
+lbl_menu_email = ctk.CTkLabel(vmenu, text="", font=("Arial", 10),
+                               text_color=C_TEXT2, fg_color="transparent")
+lbl_menu_email.pack(pady=(0, 24))
 
 def actualizar_label_email():
     try:
@@ -378,20 +390,22 @@ def actualizar_label_email():
             ).fetchone()
         if row:
             email = fernet.decrypt(row[0]).decode("utf-8")
-            lbl_menu_email.config(text=f"Sesion: {sesion_usuario['nombre']}  |  Correo: {email}")
+            lbl_menu_email.configure(
+                text=f"Sesion: {sesion_usuario['nombre']}  |  Correo: {email}")
     except Exception:
-        lbl_menu_email.config(text=f"Sesion: {sesion_usuario['nombre']}")
+        lbl_menu_email.configure(text=f"Sesion: {sesion_usuario['nombre']}")
 
 for _txt, _cmd in [
-    ("Productos",            lambda: [mostrar(vproductos), cargar_productos()]),
-    ("Bitacora de Auditoria",lambda: [mostrar(vbitacora),  cargar_bitacora()]),
-    ("Verificar Integridad", lambda: [mostrar(vintegridad), verificar_integridad()]),
-    ("Generar Backup",       lambda: generar_backup()),
+    ("Productos",             lambda: [mostrar(vproductos), cargar_productos()]),
+    ("Bitacora de Auditoria", lambda: [mostrar(vbitacora),  cargar_bitacora()]),
+    ("Verificar Integridad",  lambda: [mostrar(vintegridad), verificar_integridad()]),
+    ("Generar Backup",        lambda: generar_backup()),
 ]:
-    mk_btn(vmenu, _txt, _cmd, width=26).pack(pady=5)
+    mk_btn(vmenu, _txt, _cmd, width=260).pack(pady=6)
 
-tk.Frame(vmenu, bg=BORDER, height=1).pack(fill="x", padx=60, pady=18)
-mk_btn(vmenu, "Cerrar sesion", lambda: mostrar(inicio), width=26).pack()
+ctk.CTkFrame(vmenu, fg_color=C_BORDER, height=2, corner_radius=0).pack(
+    fill="x", padx=60, pady=20)
+mk_btn(vmenu, "Cerrar sesion", lambda: mostrar(inicio), width=260).pack()
 
 # ── BACKUP ────────────────────────────────────────────────────────────────────
 def generar_backup():
@@ -405,8 +419,9 @@ def generar_backup():
         messagebox.showerror("Error", f"No se pudo generar el backup:\n{e}")
 
 # ── PRODUCTOS — TABLA ─────────────────────────────────────────────────────────
-tk.Label(vproductos, text="Gestion de Productos",
-         font=("Arial", 14, "bold"), bg=BG2, fg=FG).pack(pady=(20, 10))
+ctk.CTkLabel(vproductos, text="Gestion de Productos",
+             font=("Arial", 15, "bold"), text_color=C_TEXT,
+             fg_color="transparent").pack(pady=(20, 10))
 
 cols_p = ("ID", "Nombre", "SKU", "Cantidad", "Precio")
 tree_p = ttk.Treeview(vproductos, columns=cols_p, show="headings", height=12)
@@ -419,19 +434,21 @@ for col in cols_p:
     tree_p.heading(col, text=col)
 tree_p.pack(padx=16, pady=4)
 
-_pp = tk.Frame(vproductos, bg=BG2)
+_pp = ctk.CTkFrame(vproductos, fg_color="transparent")
 _pp.pack(pady=8)
-mk_btn(_pp, "Nuevo",    lambda: abrir_formulario("crear"),  width=10).grid(row=0, column=0, padx=4)
-mk_btn(_pp, "Editar",   lambda: abrir_formulario("editar"), width=10).grid(row=0, column=1, padx=4)
-mk_btn(_pp, "Eliminar", lambda: eliminar_producto(),        width=10).grid(row=0, column=2, padx=4)
-tk.Frame(vproductos, bg=BORDER, height=1).pack(fill="x", padx=40, pady=8)
-mk_btn(vproductos, "Volver al menu", lambda: mostrar(vmenu), width=20).pack(pady=4)
+mk_btn(_pp, "Nuevo",    lambda: abrir_formulario("crear"),  width=100).grid(row=0, column=0, padx=4)
+mk_btn(_pp, "Editar",   lambda: abrir_formulario("editar"), width=100).grid(row=0, column=1, padx=4)
+mk_btn(_pp, "Eliminar", lambda: eliminar_producto(),        width=100).grid(row=0, column=2, padx=4)
+ctk.CTkFrame(vproductos, fg_color=C_BORDER, height=2, corner_radius=0).pack(
+    fill="x", padx=40, pady=8)
+mk_btn(vproductos, "Volver al menu", lambda: mostrar(vmenu), width=200).pack(pady=4)
 
 def cargar_productos():
     try:
         tree_p.delete(*tree_p.get_children())
         with get_con() as con:
-            rows = con.execute("SELECT id, nombre, sku, cantidad, precio FROM products").fetchall()
+            rows = con.execute(
+                "SELECT id, nombre, sku, cantidad, precio FROM products").fetchall()
         for r in rows:
             tree_p.insert("", "end", values=(r[0], r[1], r[2], r[3], f"${r[4]:.2f}"))
     except sqlite3.Error as e:
@@ -457,16 +474,18 @@ def eliminar_producto():
 # ── PRODUCTOS — FORMULARIO ────────────────────────────────────────────────────
 form_mode = {"accion": "crear", "pid": None}
 
-lbl_form_titulo = tk.Label(vformulario, font=("Arial", 14, "bold"), bg=BG2, fg=FG)
-lbl_form_titulo.pack(pady=(30, 20))
+lbl_form_titulo = ctk.CTkLabel(vformulario, text="",
+                                font=("Arial", 15, "bold"),
+                                text_color=C_TEXT, fg_color="transparent")
+lbl_form_titulo.pack(pady=(40, 24))
 
-_fpanel = tk.Frame(vformulario, bg=BG2)
+_fpanel = ctk.CTkFrame(vformulario, fg_color="transparent")
 _fpanel.pack()
 labels_p = ["Nombre:", "SKU:", "Cantidad:", "Precio:"]
 entries_p = {}
 for i, lbl in enumerate(labels_p):
-    mk_label(_fpanel, lbl, fg=FG2).grid(row=i*2, column=0, sticky="w", pady=(4,1))
-    e = mk_entry(_fpanel, width=26)
+    mk_label(_fpanel, lbl).grid(row=i*2, column=0, sticky="w", pady=(4, 1))
+    e = mk_entry(_fpanel, width=260)
     e.grid(row=i*2+1, column=0, pady=(0, 8))
     entries_p[lbl] = e
 
@@ -487,11 +506,11 @@ def abrir_formulario(accion):
         entries_p["SKU:"].insert(0, vals[2])
         entries_p["Cantidad:"].insert(0, vals[3])
         entries_p["Precio:"].insert(0, str(vals[4]).replace("$", ""))
-        lbl_form_titulo.config(text="Editar Producto")
+        lbl_form_titulo.configure(text="Editar Producto")
     else:
         limpiar_form_p()
         form_mode["pid"] = None
-        lbl_form_titulo.config(text="Nuevo Producto")
+        lbl_form_titulo.configure(text="Nuevo Producto")
     form_mode["accion"] = accion
     mostrar(vformulario)
 
@@ -527,15 +546,17 @@ def guardar_formulario():
     except sqlite3.Error as e:
         messagebox.showerror("Error BD", str(e))
 
-tk.Frame(vformulario, bg=BORDER, height=1).pack(fill="x", padx=40, pady=12)
-_fb = tk.Frame(vformulario, bg=BG2)
+ctk.CTkFrame(vformulario, fg_color=C_BORDER, height=2, corner_radius=0).pack(
+    fill="x", padx=40, pady=14)
+_fb = ctk.CTkFrame(vformulario, fg_color="transparent")
 _fb.pack()
-mk_btn(_fb, "Guardar",  guardar_formulario,         width=14).grid(row=0, column=0, padx=6)
-mk_btn(_fb, "Cancelar", lambda: mostrar(vproductos), width=14).grid(row=0, column=1, padx=6)
+mk_btn(_fb, "Guardar",  guardar_formulario,          width=140).grid(row=0, column=0, padx=6)
+mk_btn(_fb, "Cancelar", lambda: mostrar(vproductos),  width=140).grid(row=0, column=1, padx=6)
 
 # ── BITACORA ──────────────────────────────────────────────────────────────────
-tk.Label(vbitacora, text="Bitacora de Auditoria",
-         font=("Arial", 14, "bold"), bg=BG2, fg=FG).pack(pady=(20, 10))
+ctk.CTkLabel(vbitacora, text="Bitacora de Auditoria",
+             font=("Arial", 15, "bold"), text_color=C_TEXT,
+             fg_color="transparent").pack(pady=(20, 10))
 
 cols_b = ("ID", "Fecha", "Usuario", "Accion", "Detalle")
 tree_b = ttk.Treeview(vbitacora, columns=cols_b, show="headings", height=14)
@@ -548,8 +569,9 @@ for col in cols_b:
     tree_b.heading(col, text=col)
 tree_b.pack(padx=10, pady=4, fill="both", expand=True)
 
-tk.Frame(vbitacora, bg=BORDER, height=1).pack(fill="x", padx=40, pady=8)
-mk_btn(vbitacora, "Volver al menu", lambda: mostrar(vmenu), width=20).pack(pady=4)
+ctk.CTkFrame(vbitacora, fg_color=C_BORDER, height=2, corner_radius=0).pack(
+    fill="x", padx=40, pady=8)
+mk_btn(vbitacora, "Volver al menu", lambda: mostrar(vmenu), width=200).pack(pady=4)
 
 def cargar_bitacora():
     try:
@@ -564,17 +586,19 @@ def cargar_bitacora():
         messagebox.showerror("Error BD", str(e))
 
 # ── INTEGRIDAD ────────────────────────────────────────────────────────────────
-tk.Label(vintegridad, text="Verificacion de Integridad",
-         font=("Arial", 14, "bold"), bg=BG2, fg=FG).pack(pady=(20, 10))
+ctk.CTkLabel(vintegridad, text="Verificacion de Integridad",
+             font=("Arial", 15, "bold"), text_color=C_TEXT,
+             fg_color="transparent").pack(pady=(20, 10))
 
-resultado_int = tk.Text(vintegridad, height=16, width=58, state="disabled",
-                        bg=ENTRY_BG, fg=FG, insertbackground=FG,
-                        font=("Courier", 9), relief="flat",
-                        highlightthickness=1, highlightbackground=BORDER)
+resultado_int = ctk.CTkTextbox(vintegridad, height=300, width=460, state="disabled",
+                                fg_color=C_ENTRY, text_color=C_TEXT,
+                                font=("Courier", 9), corner_radius=8,
+                                border_color=C_BORDER, border_width=1)
 resultado_int.pack(padx=16, pady=4)
 
-tk.Frame(vintegridad, bg=BORDER, height=1).pack(fill="x", padx=40, pady=8)
-mk_btn(vintegridad, "Volver al menu", lambda: mostrar(vmenu), width=20).pack(pady=4)
+ctk.CTkFrame(vintegridad, fg_color=C_BORDER, height=2, corner_radius=0).pack(
+    fill="x", padx=40, pady=8)
+mk_btn(vintegridad, "Volver al menu", lambda: mostrar(vmenu), width=200).pack(pady=4)
 
 def verificar_integridad():
     try:
@@ -611,7 +635,7 @@ def verificar_integridad():
     registrar_auditoria(sesion_usuario["nombre"], "INTEGRIDAD",
                         f"Verificados: {ok} OK, {fallos} alterados")
 
-#  ARRANQUE
+# ── ARRANQUE ──────────────────────────────────────────────────────────────────
 try:
     init_db()
 except Exception as e:

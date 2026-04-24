@@ -8,3 +8,6 @@ inventario.db
 __pycache__/
 *.py[cod]
 *$py.class
+
+# IDE Settings
+.vscode/
