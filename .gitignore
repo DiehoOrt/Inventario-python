@@ -11,3 +11,6 @@ __pycache__/
 
 # IDE Settings
 .vscode/
+
+#access log
+access_log.txt

@@ -1,4 +1,5 @@
-import os, sqlite3, hashlib, shutil
+import os, sqlite3, hashlib, shutil, uuid
+import jwt
 from tkinter import messagebox, ttk
 import customtkinter as ctk
 from datetime import datetime, timedelta
@@ -53,7 +54,13 @@ def cargar_clave():
         f.write(clave)
     return clave
 
-fernet = Fernet(cargar_clave())
+_raw_key   = cargar_clave()
+fernet     = Fernet(_raw_key)
+JWT_SECRET = hashlib.sha256(_raw_key).hexdigest()
+
+TOKEN_EXP_MIN   = 60
+LOG_FILE        = os.path.join(BASE_DIR, "access_log.txt")
+tokens_invalidos = set()
 
 # ── HASH CONTRASEÑA ───────────────────────────────────────────────────────────
 def derive_hash(password: str, salt: bytes) -> bytes:
@@ -134,6 +141,10 @@ def init_db():
                     locked_until    TEXT
                 )
             """)
+            try:
+                con.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'usuario'")
+            except sqlite3.OperationalError:
+                pass
             con.execute("""
                 CREATE TABLE IF NOT EXISTS products (
                     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,8 +178,51 @@ def registrar_auditoria(usuario, accion, detalle=""):
     except sqlite3.Error:
         pass
 
+# ── TOKEN JWT ─────────────────────────────────────────────────────────────────
+def generar_token(username, role):
+    payload = {
+        "sub":  username,
+        "role": role,
+        "jti":  str(uuid.uuid4()),
+        "exp":  datetime.utcnow() + timedelta(minutes=TOKEN_EXP_MIN),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+def validar_token(token):
+    if not token or token in tokens_invalidos:
+        return None
+    try:
+        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        return None
+
+def log_acceso(accion, usuario, token=None):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if token:
+        detalle = "Token: " + token[:10] + "..." + token[-6:]
+    else:
+        detalle = "Token invalidado"
+    linea = f"[{ts}] {accion} - Usuario: {usuario} - {detalle}"
+    print(linea)
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(linea + "\n")
+    except OSError:
+        pass
+
+def sesion_ok():
+    if validar_token(sesion_usuario.get("token")):
+        return True
+    messagebox.showerror("Sesion invalida", "Tu sesion ha expirado. Vuelve a iniciar sesion.")
+    mostrar(inicio)
+    return False
+
+def es_admin():
+    payload = validar_token(sesion_usuario.get("token"))
+    return payload is not None and payload.get("role") == "admin"
+
 # ── SESION ────────────────────────────────────────────────────────────────────
-sesion_usuario = {"nombre": ""}
+sesion_usuario = {"nombre": "", "token": None, "role": ""}
 
 # ── VENTANA PRINCIPAL ─────────────────────────────────────────────────────────
 v = ctk.CTk()
@@ -243,7 +297,7 @@ def guardar_login():
     try:
         with get_con() as con:
             row = con.execute(
-                "SELECT salt, pwd_hash, failed_attempts, locked_until FROM users WHERE username=?",
+                "SELECT salt, pwd_hash, failed_attempts, locked_until, role FROM users WHERE username=?",
                 (user,)
             ).fetchone()
     except sqlite3.Error as e:
@@ -257,7 +311,7 @@ def guardar_login():
         messagebox.showerror("Error", "Usuario no encontrado")
         return
 
-    salt, stored_hash, intentos, locked_until = row
+    salt, stored_hash, intentos, locked_until, rol = row
 
     if locked_until:
         fin_bloqueo = datetime.fromisoformat(locked_until)
@@ -310,8 +364,12 @@ def guardar_login():
                 (user,))
     except sqlite3.Error:
         pass
-    registrar_auditoria(user, "LOGIN_OK", "Acceso exitoso")
+    token = generar_token(user, rol)
     sesion_usuario["nombre"] = user
+    sesion_usuario["token"]  = token
+    sesion_usuario["role"]   = rol
+    registrar_auditoria(user, "LOGIN_OK", f"Acceso exitoso - Rol: {rol}")
+    log_acceso("LOGIN", user, token)
     login_username.delete(0, "end")
     login_password.delete(0, "end")
     actualizar_label_email()
@@ -338,11 +396,20 @@ reg_password.grid(row=3, column=0, pady=(0, 12))
 mk_label(_rf, "Correo electronico").grid(row=4, column=0, sticky="w", pady=(0, 2))
 reg_email = mk_entry(_rf)
 reg_email.grid(row=5, column=0, pady=(0, 20))
+mk_label(_rf, "Rol").grid(row=6, column=0, sticky="w", pady=(0, 2))
+reg_rol = ctk.CTkOptionMenu(_rf, values=["usuario", "admin"],
+                             fg_color=C_ENTRY, button_color=C_BLUE,
+                             button_hover_color=C_HOVER, text_color=C_TEXT,
+                             dropdown_fg_color=C_CARD, dropdown_text_color=C_TEXT,
+                             font=("Arial", 10), width=220)
+reg_rol.grid(row=7, column=0, pady=(0, 20))
+reg_rol.set("usuario")
 
 def guardar_register():
     user  = reg_username.get().strip()
     pwd   = reg_password.get()
     email = reg_email.get().strip()
+    rol   = reg_rol.get()
 
     err = validar_usuario(user) or validar_password(pwd) or validar_email(email)
     if err:
@@ -355,8 +422,8 @@ def guardar_register():
     try:
         with get_con() as con:
             con.execute(
-                "INSERT INTO users(username, salt, pwd_hash, email_enc) VALUES(?,?,?,?)",
-                (user, salt, pwd_hash, email_enc)
+                "INSERT INTO users(username, salt, pwd_hash, email_enc, role) VALUES(?,?,?,?,?)",
+                (user, salt, pwd_hash, email_enc, rol)
             )
         registrar_auditoria(user, "INSERT", "Nuevo usuario registrado")
         messagebox.showinfo("Exito", "Usuario registrado correctamente")
@@ -391,21 +458,56 @@ def actualizar_label_email():
         if row:
             email = fernet.decrypt(row[0]).decode("utf-8")
             lbl_menu_email.configure(
-                text=f"Sesion: {sesion_usuario['nombre']}  |  Correo: {email}")
+                text=f"Sesion: {sesion_usuario['nombre']}  |  Rol: {sesion_usuario['role']}  |  Correo: {email}")
     except Exception:
         lbl_menu_email.configure(text=f"Sesion: {sesion_usuario['nombre']}")
 
+def _abrir_bitacora():
+    if not sesion_ok():
+        return
+    if not es_admin():
+        messagebox.showerror("Acceso denegado",
+            "Esta funcion es solo para administradores.")
+        registrar_auditoria(sesion_usuario["nombre"], "ACCESO_DENEGADO",
+                            "Intento acceder a Bitacora de Auditoria")
+        return
+    mostrar(vbitacora)
+    cargar_bitacora()
+
+def _abrir_integridad():
+    if not sesion_ok():
+        return
+    if not es_admin():
+        messagebox.showerror("Acceso denegado",
+            "Esta funcion es solo para administradores.")
+        registrar_auditoria(sesion_usuario["nombre"], "ACCESO_DENEGADO",
+                            "Intento acceder a Verificar Integridad")
+        return
+    mostrar(vintegridad)
+    verificar_integridad()
+
+def cerrar_sesion():
+    token = sesion_usuario.get("token")
+    if token:
+        log_acceso("LOGOUT", sesion_usuario["nombre"])
+        tokens_invalidos.add(token)
+        registrar_auditoria(sesion_usuario["nombre"], "LOGOUT", "Sesion cerrada")
+    sesion_usuario["nombre"] = ""
+    sesion_usuario["token"]  = None
+    sesion_usuario["role"]   = ""
+    mostrar(inicio)
+
 for _txt, _cmd in [
-    ("Productos",             lambda: [mostrar(vproductos), cargar_productos()]),
-    ("Bitacora de Auditoria", lambda: [mostrar(vbitacora),  cargar_bitacora()]),
-    ("Verificar Integridad",  lambda: [mostrar(vintegridad), verificar_integridad()]),
-    ("Generar Backup",        lambda: generar_backup()),
+    ("Productos",             lambda: sesion_ok() and [mostrar(vproductos), cargar_productos()]),
+    ("Bitacora de Auditoria", lambda: _abrir_bitacora()),
+    ("Verificar Integridad",  lambda: _abrir_integridad()),
+    ("Generar Backup",        lambda: sesion_ok() and generar_backup()),
 ]:
     mk_btn(vmenu, _txt, _cmd, width=260).pack(pady=6)
 
 ctk.CTkFrame(vmenu, fg_color=C_BORDER, height=2, corner_radius=0).pack(
     fill="x", padx=60, pady=20)
-mk_btn(vmenu, "Cerrar sesion", lambda: mostrar(inicio), width=260).pack()
+mk_btn(vmenu, "Cerrar sesion", cerrar_sesion, width=260).pack()
 
 # ── BACKUP ────────────────────────────────────────────────────────────────────
 def generar_backup():
