@@ -14,14 +14,14 @@ MAX_INTENTOS  = 5
 BLOQUEO_MIN   = 5
 
 # PALETA
-BG       = "#ececec"
+BG       = "#c02929"
 BG2      = "#f8f8f8"
-FG       = "#2e2e2e"
-FG2      = "#8a8a8a"
-BTN_BG   = "#5a5a5a"
+FG       = "#d32323"
+FG2      = "#0c0aa5"
+BTN_BG   = "#2d8f10"
 BTN_ACT  = "#6e6e6e"
-ENTRY_BG = "#ffffff"
-SEL      = "#dcdcdc"
+ENTRY_BG = "#f30cb9"
+SEL      = "#bd2d2d"
 BORDER   = "#d0d0d0"
 
 def mk_btn(parent, text, command, width=12, **kw):
