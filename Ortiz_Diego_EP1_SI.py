@@ -1,4 +1,5 @@
-import os, sqlite3, tkinter as tk, hashlib, shutil
+import os, sqlite3, tkinter as tk, hashlib, shutil, uuid
+import jwt
 from tkinter import messagebox, ttk
 from datetime import datetime, timedelta
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
@@ -51,7 +52,12 @@ def cargar_clave():
         f.write(clave)
     return clave
 
-fernet = Fernet(cargar_clave())
+_raw_key   = cargar_clave()
+fernet     = Fernet(_raw_key)
+JWT_SECRET = hashlib.sha256(_raw_key).hexdigest()
+
+TOKEN_EXP_MIN    = 60
+tokens_invalidos = set()
 
 #  C — HASH CONTRASEÑA
 def derive_hash(password: str, salt: bytes) -> bytes:
@@ -79,10 +85,12 @@ def validar_password(p):
         return "La contrasena no puede superar 64 caracteres"
     return None
 
-def validar_dui(d):
+def validar_email(e):
     import re
-    if not re.fullmatch(r"\d{8}-\d", d):
-        return "Formato DUI invalido. Use: ########-#"
+    if not e or len(e) > 100:
+        return "El correo no puede estar vacio ni superar 100 caracteres"
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", e):
+        return "Formato de correo invalido. Use: usuario@dominio.com"
     return None
 
 def validar_producto(nombre, sku, cantidad, precio):
@@ -124,12 +132,16 @@ def init_db():
                                             CHECK(length(username) >= 3),
                     salt            BLOB    NOT NULL,
                     pwd_hash        BLOB    NOT NULL,
-                    dui_enc         BLOB    NOT NULL,
+                    email_enc       BLOB    NOT NULL,
                     failed_attempts INTEGER NOT NULL DEFAULT 0
                                             CHECK(failed_attempts >= 0),
                     locked_until    TEXT
                 )
             """)
+            try:
+                con.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'usuario'")
+            except sqlite3.OperationalError:
+                pass
             con.execute("""
                 CREATE TABLE IF NOT EXISTS products (
                     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -149,6 +161,19 @@ def init_db():
                     detalle  TEXT
                 )
             """)
+            n_admins = con.execute("SELECT COUNT(*) FROM users WHERE role='admin'").fetchone()[0]
+            if n_admins == 0:
+                _salt = os.urandom(16)
+                _hash = derive_hash("admin123", _salt)
+                _enc  = fernet.encrypt(b"admin@sistema.local")
+                try:
+                    con.execute(
+                        "INSERT INTO users(username, salt, pwd_hash, email_enc, role) VALUES(?,?,?,?,?)",
+                        ("admin", _salt, _hash, _enc, "admin")
+                    )
+                    print("[INIT] Superusuario creado — usuario: admin  contrasena: admin123")
+                except sqlite3.IntegrityError:
+                    con.execute("UPDATE users SET role='admin' WHERE username='admin'")
     except sqlite3.Error as e:
         messagebox.showerror("Error BD", f"No se pudo inicializar la base de datos:\n{e}")
 
@@ -163,8 +188,42 @@ def registrar_auditoria(usuario, accion, detalle=""):
     except sqlite3.Error:
         pass
 
+# TOKEN JWT
+def generar_token(username, role):
+    payload = {
+        "sub":  username,
+        "role": role,
+        "jti":  str(uuid.uuid4()),
+        "exp":  datetime.utcnow() + timedelta(minutes=TOKEN_EXP_MIN),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+def validar_token(token):
+    if not token or token in tokens_invalidos:
+        return None
+    try:
+        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        return None
+
+def log_acceso(accion, usuario, token=None):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    detalle = ("Token: " + token[:10] + "..." + token[-6:]) if token else "Token invalidado"
+    print(f"[{ts}] {accion} - Usuario: {usuario} - {detalle}")
+
+def sesion_ok():
+    if validar_token(sesion_usuario.get("token")):
+        return True
+    messagebox.showerror("Sesion invalida", "Tu sesion ha expirado. Vuelve a iniciar sesion.")
+    mostrar(inicio)
+    return False
+
+def es_admin():
+    payload = validar_token(sesion_usuario.get("token"))
+    return payload is not None and payload.get("role") == "admin"
+
 #  SESION ACTUAL
-sesion_usuario = {"nombre": ""}
+sesion_usuario = {"nombre": "", "token": None, "role": ""}
 
 #  VENTANA PRINCIPAL
 v = tk.Tk()
@@ -199,10 +258,11 @@ vproductos  = mk_frame(v)
 vformulario = mk_frame(v)
 vbitacora   = mk_frame(v)
 vintegridad = mk_frame(v)
+vusuarios   = mk_frame(v)
 
 def mostrar(frame):
     for f in (inicio, vlogin, vregister, vmenu,
-              vproductos, vformulario, vbitacora, vintegridad):
+              vproductos, vformulario, vbitacora, vintegridad, vusuarios):
         f.pack_forget()
     frame.pack(fill="both", expand=True)
 
@@ -236,7 +296,7 @@ def guardar_login():
     try:
         with get_con() as con:
             row = con.execute(
-                "SELECT salt, pwd_hash, failed_attempts, locked_until FROM users WHERE username=?",
+                "SELECT salt, pwd_hash, failed_attempts, locked_until, role FROM users WHERE username=?",
                 (user,)
             ).fetchone()
     except sqlite3.Error as e:
@@ -248,7 +308,7 @@ def guardar_login():
         messagebox.showerror("Error", "Usuario no encontrado")
         return
 
-    salt, stored_hash, intentos, locked_until = row
+    salt, stored_hash, intentos, locked_until, rol = row
 
     if locked_until:
         fin_bloqueo = datetime.fromisoformat(locked_until)
@@ -299,10 +359,15 @@ def guardar_login():
             con.execute("UPDATE users SET failed_attempts=0, locked_until=NULL WHERE username=?", (user,))
     except sqlite3.Error:
         pass
-    registrar_auditoria(user, "LOGIN_OK", "Acceso exitoso")
+    token = generar_token(user, rol)
     sesion_usuario["nombre"] = user
+    sesion_usuario["token"]  = token
+    sesion_usuario["role"]   = rol
+    registrar_auditoria(user, "LOGIN_OK", f"Acceso exitoso - Rol: {rol}")
+    log_acceso("LOGIN", user, token)
     login_username.delete(0, "end")
     login_password.delete(0, "end")
+    actualizar_label_email()
     mostrar(vmenu)
 
 _lb = tk.Frame(vlogin, bg=BG2)
@@ -322,32 +387,33 @@ reg_username.grid(row=1, column=0, pady=(0, 10))
 mk_label(_rf, "Contrasena (min 6 caracteres)").grid(row=2, column=0, sticky="w", pady=(0,2))
 reg_password = mk_entry(_rf, show="*")
 reg_password.grid(row=3, column=0, pady=(0, 10))
-mk_label(_rf, "DUI (########-#)").grid(row=4, column=0, sticky="w", pady=(0,2))
-reg_dui = mk_entry(_rf)
-reg_dui.grid(row=5, column=0, pady=(0, 16))
+mk_label(_rf, "Correo electronico").grid(row=4, column=0, sticky="w", pady=(0,2))
+reg_email = mk_entry(_rf)
+reg_email.grid(row=5, column=0, pady=(0, 16))
 
 def guardar_register():
-    user = reg_username.get().strip()
-    pwd  = reg_password.get()
-    dui  = reg_dui.get().strip()
+    user  = reg_username.get().strip()
+    pwd   = reg_password.get()
+    email = reg_email.get().strip()
+    rol   = "usuario"
 
-    err = validar_usuario(user) or validar_password(pwd) or validar_dui(dui)
+    err = validar_usuario(user) or validar_password(pwd) or validar_email(email)
     if err:
         messagebox.showerror("Error de validacion", err)
         return
 
-    salt     = os.urandom(16)
-    pwd_hash = derive_hash(pwd, salt)
-    dui_enc  = fernet.encrypt(dui.encode("utf-8"))
+    salt      = os.urandom(16)
+    pwd_hash  = derive_hash(pwd, salt)
+    email_enc = fernet.encrypt(email.encode("utf-8"))
     try:
         with get_con() as con:
             con.execute(
-                "INSERT INTO users(username, salt, pwd_hash, dui_enc) VALUES(?,?,?,?)",
-                (user, salt, pwd_hash, dui_enc)
+                "INSERT INTO users(username, salt, pwd_hash, email_enc, role) VALUES(?,?,?,?,?)",
+                (user, salt, pwd_hash, email_enc, rol)
             )
         registrar_auditoria(user, "INSERT", "Nuevo usuario registrado")
         messagebox.showinfo("Exito", "Usuario registrado correctamente")
-        for e in (reg_username, reg_password, reg_dui):
+        for e in (reg_username, reg_password, reg_email):
             e.delete(0, "end")
         mostrar(inicio)
     except sqlite3.IntegrityError:
@@ -363,19 +429,77 @@ mk_btn(_rb, "Volver",    lambda: mostrar(inicio), width=14).grid(row=0, column=1
 # ── MENU PRINCIPAL ────────────────────────────────────────────────────────────
 tk.Label(vmenu, text="Menu Principal",
          font=("Arial", 16, "bold"), bg=BG2, fg=FG).pack(pady=(50, 6))
-tk.Label(vmenu, text="Selecciona una opcion",
-         font=("Arial", 9), bg=BG2, fg=FG2).pack(pady=(0, 30))
+lbl_menu_email = tk.Label(vmenu, text="", font=("Arial", 9), bg=BG2, fg=FG2)
+lbl_menu_email.pack(pady=(0, 20))
+
+def actualizar_label_email():
+    try:
+        with get_con() as con:
+            row = con.execute(
+                "SELECT email_enc FROM users WHERE username=?",
+                (sesion_usuario["nombre"],)
+            ).fetchone()
+        if row:
+            email = fernet.decrypt(row[0]).decode("utf-8")
+            lbl_menu_email.config(text=f"Sesion: {sesion_usuario['nombre']}  |  Rol: {sesion_usuario['role']}  |  Correo: {email}")
+    except Exception:
+        lbl_menu_email.config(text=f"Sesion: {sesion_usuario['nombre']}")
+
+def _abrir_usuarios():
+    if not sesion_ok():
+        return
+    if not es_admin():
+        messagebox.showerror("Acceso denegado", "Esta funcion es solo para administradores.")
+        registrar_auditoria(sesion_usuario["nombre"], "ACCESO_DENEGADO",
+                            "Intento acceder a Gestionar Usuarios")
+        return
+    mostrar(vusuarios)
+    cargar_usuarios()
+
+def _abrir_bitacora():
+    if not sesion_ok():
+        return
+    if not es_admin():
+        messagebox.showerror("Acceso denegado", "Esta funcion es solo para administradores.")
+        registrar_auditoria(sesion_usuario["nombre"], "ACCESO_DENEGADO",
+                            "Intento acceder a Bitacora de Auditoria")
+        return
+    mostrar(vbitacora)
+    cargar_bitacora()
+
+def _abrir_integridad():
+    if not sesion_ok():
+        return
+    if not es_admin():
+        messagebox.showerror("Acceso denegado", "Esta funcion es solo para administradores.")
+        registrar_auditoria(sesion_usuario["nombre"], "ACCESO_DENEGADO",
+                            "Intento acceder a Verificar Integridad")
+        return
+    mostrar(vintegridad)
+    verificar_integridad()
+
+def cerrar_sesion():
+    token = sesion_usuario.get("token")
+    if token:
+        log_acceso("LOGOUT", sesion_usuario["nombre"])
+        tokens_invalidos.add(token)
+        registrar_auditoria(sesion_usuario["nombre"], "LOGOUT", "Sesion cerrada")
+    sesion_usuario["nombre"] = ""
+    sesion_usuario["token"]  = None
+    sesion_usuario["role"]   = ""
+    mostrar(inicio)
 
 for _txt, _cmd in [
-    ("Productos",            lambda: [mostrar(vproductos), cargar_productos()]),
-    ("Bitacora de Auditoria",lambda: [mostrar(vbitacora),  cargar_bitacora()]),
-    ("Verificar Integridad", lambda: [mostrar(vintegridad), verificar_integridad()]),
-    ("Generar Backup",       lambda: generar_backup()),
+    ("Productos",            lambda: sesion_ok() and [mostrar(vproductos), cargar_productos()]),
+    ("Gestionar Usuarios",   lambda: _abrir_usuarios()),
+    ("Bitacora de Auditoria",lambda: _abrir_bitacora()),
+    ("Verificar Integridad", lambda: _abrir_integridad()),
+    ("Generar Backup",       lambda: sesion_ok() and generar_backup()),
 ]:
     mk_btn(vmenu, _txt, _cmd, width=26).pack(pady=5)
 
 tk.Frame(vmenu, bg=BORDER, height=1).pack(fill="x", padx=60, pady=18)
-mk_btn(vmenu, "Cerrar sesion", lambda: mostrar(inicio), width=26).pack()
+mk_btn(vmenu, "Cerrar sesion", cerrar_sesion, width=26).pack()
 
 # ── BACKUP ────────────────────────────────────────────────────────────────────
 def generar_backup():
@@ -594,6 +718,70 @@ def verificar_integridad():
     resultado_int.configure(state="disabled")
     registrar_auditoria(sesion_usuario["nombre"], "INTEGRIDAD",
                         f"Verificados: {ok} OK, {fallos} alterados")
+
+# ── GESTIONAR USUARIOS ────────────────────────────────────────────────────────
+tk.Label(vusuarios, text="Gestionar Usuarios",
+         font=("Arial", 14, "bold"), bg=BG2, fg=FG).pack(pady=(20, 10))
+
+cols_u = ("ID", "Usuario", "Rol")
+tree_u = ttk.Treeview(vusuarios, columns=cols_u, show="headings", height=10)
+tree_u.column("ID",      width=50,  anchor="center")
+tree_u.column("Usuario", width=180, anchor="w")
+tree_u.column("Rol",     width=120, anchor="center")
+for col in cols_u:
+    tree_u.heading(col, text=col)
+tree_u.pack(padx=16, pady=4)
+
+_up = tk.Frame(vusuarios, bg=BG2)
+_up.pack(pady=8)
+mk_btn(_up, "Cambiar Rol", lambda: cambiar_rol_usuario(), width=16).grid(row=0, column=0, padx=4)
+tk.Frame(vusuarios, bg=BORDER, height=1).pack(fill="x", padx=40, pady=8)
+mk_btn(vusuarios, "Volver al menu", lambda: mostrar(vmenu), width=20).pack(pady=4)
+
+def cargar_usuarios():
+    try:
+        tree_u.delete(*tree_u.get_children())
+        with get_con() as con:
+            rows = con.execute(
+                "SELECT id, username, role FROM users ORDER BY id"
+            ).fetchall()
+        for r in rows:
+            tree_u.insert("", "end", values=r)
+    except sqlite3.Error as e:
+        messagebox.showerror("Error BD", str(e))
+
+def cambiar_rol_usuario():
+    sel = tree_u.selection()
+    if not sel:
+        messagebox.showwarning("Aviso", "Selecciona un usuario de la tabla")
+        return
+    uid       = tree_u.item(sel[0])["values"][0]
+    uname     = tree_u.item(sel[0])["values"][1]
+    rol_actual = tree_u.item(sel[0])["values"][2]
+
+    if uname == sesion_usuario["nombre"]:
+        messagebox.showerror("Error", "No puedes cambiar tu propio rol")
+        return
+
+    if rol_actual == "admin":
+        with get_con() as con:
+            n = con.execute("SELECT COUNT(*) FROM users WHERE role='admin'").fetchone()[0]
+        if n <= 1:
+            messagebox.showerror("Error", "No puedes quitar el rol al unico administrador")
+            return
+
+    nuevo_rol = "usuario" if rol_actual == "admin" else "admin"
+    if not messagebox.askyesno("Confirmar",
+            f"Cambiar rol de '{uname}':\n{rol_actual}  →  {nuevo_rol}"):
+        return
+    try:
+        with get_con() as con:
+            con.execute("UPDATE users SET role=? WHERE id=?", (nuevo_rol, uid))
+        registrar_auditoria(sesion_usuario["nombre"], "UPDATE_ROLE",
+                            f"Usuario {uname}: {rol_actual} -> {nuevo_rol}")
+        cargar_usuarios()
+    except sqlite3.Error as e:
+        messagebox.showerror("Error BD", str(e))
 
 #  ARRANQUE
 try:
