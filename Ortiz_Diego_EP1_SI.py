@@ -14,8 +14,13 @@ DB        = os.path.join(BASE_DIR, "inventario.db")
 MAX_INTENTOS  = 5
 BLOQUEO_MIN   = 5
 
+
+#hola como estas 
+
+
+
 # PALETA
-BG       = "#ececec"
+BG       = "#fa0404"
 BG2      = "#f8f8f8"
 FG       = "#2e2e2e"
 FG2      = "#8a8a8a"
@@ -796,3 +801,22 @@ print("DB :", os.path.abspath(DB))
 print("Key:", os.path.abspath(KEY_FILE))
 mostrar(inicio)
 v.mainloop()
+
+
+
+
+
+
+
+# holaaaaaaaaaaa
+# asdsdasd
+# asdasdasd
+# asdadadasddddddddddddas
+# dasdasdadasd
+# asdasdddddddddddddas
+# dasdasdasdasdasd
+# asdasdddddddddddasdasd
+# adsdasdasadasdasdasdasd
+# asdasdasdasd
+# asdasdasdd
+# def
