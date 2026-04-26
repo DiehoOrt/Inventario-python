@@ -21,12 +21,12 @@ BLOQUEO_MIN   = 5
 
 # PALETA
 BG       = "#fa0404"
-BG2      = "#f8f8f8"
-FG       = "#2e2e2e"
-FG2      = "#8a8a8a"
-BTN_BG   = "#5a5a5a"
-BTN_ACT  = "#6e6e6e"
-ENTRY_BG = "#ffffff"
+BG2      = "#911212"
+FG       = "#c20f0f"
+FG2      = "#e60000"
+BTN_BG   = "#d30e0e"
+BTN_ACT  = "#ce0707"
+ENTRY_BG = "#d10d0d"
 SEL      = "#dcdcdc"
 BORDER   = "#d0d0d0"
 
